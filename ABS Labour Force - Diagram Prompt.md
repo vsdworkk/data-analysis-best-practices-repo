@@ -13,7 +13,7 @@ Exact subtitle: "Run the notebook whenever a new release is available"
 Main flow down the page, with a reference box on the left of the checking step and a stop branch on the right of the decision:
 1. Rounded box with download icon:
 "1. Get the latest data"
-"Download four datasets from the ABS website."
+"Download three datasets from the ABS website."
 Down arrow.
 2. Rounded box with checklist icon:
 "2. Check the data"
