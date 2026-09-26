@@ -4,7 +4,7 @@
 
 Run the notebook from this project folder using **Restart Kernel and Run All Cells**. The notebook installs its Python dependencies in its first cell. It chooses the next reference month after the latest completed run, builds the corresponding ABS download URLs, and writes files under `outputs/abs_labour_force/`. Generated outputs are excluded from Git.
 
-The three reference workbooks are part of this repository because the structural checks depend on them. If ABS changes a workbook's layout or definitions, review the change before updating the relevant reference workbook and its saved SHA-256 fingerprint in the notebook.
+The three reference workbooks are part of this repository because the structural checks depend on them. If ABS changes a workbook's layout or definitions, review the change before updating the relevant reference workbook.
 
 The MLF1 workbook is expected to move to a separate ABS publication from October 2026. Its URL logic will need updating for that release.
 
