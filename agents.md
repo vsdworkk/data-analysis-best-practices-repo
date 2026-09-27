@@ -34,3 +34,7 @@ monthly.head(10)
 (monthly
    .pivot(index="month", columns="region", values="n_exits")
    .plot(figsize=(10, 5), title="Monthly exits by region"))
+
+Notebook workflow preference (2026-09-26): Edit Python notebooks directly in the current chat rather than delegating, preserve conversational context, and keep changes proportionate. This preference is subject to higher-priority execution instructions.
+
+Horizontal formatting preference (2026-09-26): Prefer compact, horizontal definitions when they fit, using Ruff with line-length = 160 and skip-magic-trailing-comma = true. Allow Ruff to wrap longer expressions; avoid per-line formatting exclusions.
