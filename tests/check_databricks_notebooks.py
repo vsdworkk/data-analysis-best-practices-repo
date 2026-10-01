@@ -3,10 +3,12 @@ from io import StringIO
 from pathlib import Path
 from shutil import copy2
 from tempfile import TemporaryDirectory
+from unittest import TestCase
 from unittest.mock import MagicMock, patch
 import ast
 import nbformat
 import pandas as pd
+from openpyxl import load_workbook
 
 root = Path(__file__).resolve().parents[1]
 notebooks = root / "notebooks"
@@ -27,7 +29,7 @@ with TemporaryDirectory() as folder:
     (workspace / "Reference Datasets").mkdir()
     for name in ["Table 010.xlsx", "Interim Table 14.xlsx", "MLF1.xlsx"]:
         copy2(root / "Reference Datasets" / name, workspace / "Reference Datasets" / name)
-    params = {"release_month": "2026-07", "run_date": "2026-09-27", "job_run_id": "12345", "workspace_path": str(workspace)}
+    params = {"run_date": "2026-09-27", "job_run_id": "12345", "workspace_path": str(workspace)}
 
     for key, title, filename, parse_id, tidy_id in [
         ("table_010", "Table 010", "Table 010.xlsx", "c580e5a9", "839f822b"),
@@ -42,6 +44,22 @@ with TemporaryDirectory() as folder:
         response = MagicMock(content=(workspace / "Reference Datasets" / filename).read_bytes())
         env = {"dbutils": dbutils, "spark": spark}
 
+        # Keep each download at July while making its reference workbook end in June.
+        if key == "mlf1":
+            # Rebuild the temporary reference without Excel presentation pivots.
+            with pd.ExcelFile(workspace / "Reference Datasets" / filename) as book:
+                sheet_names = book.sheet_names
+                reference = pd.read_excel(book, sheet_name="Data 1", header=None)
+            reference.loc[reference[0].eq(pd.Timestamp("2026-07-01")), 0] = pd.Timestamp("2026-06-01")
+            with pd.ExcelWriter(workspace / "Reference Datasets" / filename, engine="openpyxl") as writer:
+                for sheet in sheet_names:
+                    (reference if sheet == "Data 1" else pd.DataFrame()).to_excel(writer, sheet_name=sheet, header=False, index=False)
+        else:
+            book = load_workbook(workspace / "Reference Datasets" / filename)
+            book["Data1"].delete_rows(book["Data1"].max_row)
+            book.save(workspace / "Reference Datasets" / filename)
+            book.close()
+
         # Run every cell with a reference workbook download and a mocked Spark destination.
         with patch("requests.get", return_value=response), redirect_stdout(StringIO()):
             for cell in nb.cells:
@@ -49,7 +67,13 @@ with TemporaryDirectory() as folder:
                     exec(compile(cell.source, str(path), "exec"), env)
         df = env["df"]
         assert env["csv_file"].exists()
-        assert env["run"] == workspace / "outputs" / "runs" / "2026-09-27_12345" / key
+        assert env["run"] == workspace / "outputs" / key / "2026-09-27_12345"
+        assert env["release_month"] == "2026-07"
+        assert "release_month" not in [call.args[0] for call in dbutils.widgets.get.call_args_list]
+        manifest = pd.read_csv(env["run"] / "sources.csv")
+        assert manifest.loc[0, "reference_period"] == "2026-07-01"
+        assert manifest.loc[0, "output_file"] == env["csv_file"].name
+        assert manifest.loc[0, "source_url"] == env["source_url"]
         assert not list(env["run"].glob("*.json"))
         dbutils.jobs.taskValues.set.assert_not_called()
 
@@ -80,4 +104,40 @@ with TemporaryDirectory() as folder:
         spark.sql.assert_not_called()
         print(key, df.shape, "matches original processing; CSV and direct overwrite verified")
 
+        # A failed Delta write must leave no completion record.
+        failed = env["output"] / "2026-09-28_failed"
+        failed.mkdir()
+        failed_spark = MagicMock()
+        failed_spark.createDataFrame.return_value.withColumn.return_value.write.format.return_value.mode.return_value.saveAsTable.side_effect = RuntimeError(
+            "Test publication failure"
+        )
+        with TestCase().assertRaisesRegex(RuntimeError, "Test publication failure"):
+            exec(nb.cells[14].source, {**env, "spark": failed_spark, "run": failed})
+        assert not (failed / "sources.csv").exists()
+
+        # Ignore incomplete runs and another table's later release; advance past completed July.
+        other_key = "table_014" if key != "table_014" else "mlf1"
+        other = workspace / "outputs" / other_key / "other_run"
+        other.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"reference_period": ["2030-01-01"]}).to_csv(other / "sources.csv", index=False)
+        with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
+            exec(nb.cells[4].source, env)
+        assert env["release_month"] == "2026-08"
+
+        # Select the latest completed release regardless of folder name or insertion order.
+        later = env["output"] / "earlier_folder_name"
+        later.mkdir()
+        pd.DataFrame({"reference_period": ["2026-09-01"]}).to_csv(later / "sources.csv", index=False)
+        with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
+            exec(nb.cells[4].source, env)
+        assert env["release_month"] == "2026-10"
+
+        # If only an older completion exists, the newer reference month determines the next release.
+        (later / "sources.csv").unlink()
+        pd.DataFrame({"reference_period": ["2026-05-01"]}).to_csv(env["run"] / "sources.csv", index=False)
+        with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
+            exec(nb.cells[4].source, env)
+        assert env["release_month"] == "2026-07"
+        (other / "sources.csv").unlink()
+        print(f"{title} automatic release selection and publication-failure handling verified")
 print("Local checks passed. Actual Delta writes still need verification in Databricks.")
