@@ -16,7 +16,7 @@ Each notebook selects its next release automatically from its own reference work
 
 1. Import the three notebooks in `notebooks/`, or use them from a Databricks Git folder.
 2. Create a destination Unity Catalog catalogue and schema for the Delta tables.
-3. Keep `Table 010.xlsx`, `Interim Table 14.xlsx` and `MLF1.xlsx` in the workspace project's `Reference Datasets/` folder, keeping their filenames. Set `workspace_path` to the absolute `/Workspace/...` path of that project folder.
+3. Keep `Table 010.xlsx`, `Interim Table 14.xlsx` and `MLF1.xlsx` in the workspace project's `referencedatasets/` folder, keeping their filenames. Set `workspace_path` to the absolute `/Workspace/...` path of that project folder.
 4. Use compute with Spark, workspace file read/write support, `pandas`, `openpyxl`, `requests` and network access to `www.abs.gov.au`.
 5. Give the run identity permission to read the workspace reference files, write to the project's `outputs/` folder, use the catalogue and schema, and create or modify the destination tables.
 6. Fill in `catalog` and `schema` in **Section 7 of each notebook**. These are code settings, not job parameters.
@@ -32,7 +32,7 @@ Set these job parameters, or fill in the corresponding notebook widgets for an i
 |---|---|---|
 | `run_date` | `{{job.start_time.iso_date}}` | Job start date in UTC (`YYYY-MM-DD`); for an interactive run, enter the date you run it. |
 | `job_run_id` | `{{job.run_id}}` | Set this dynamic reference in job settings; for an interactive run, enter a folder label such as `manual-july-2026`. |
-| `workspace_path` | `/Workspace/Users/<your-email>/abs-labour-force` | Workspace project folder containing `Reference Datasets/`; generated Excel files and CSVs go into `outputs/`. |
+| `workspace_path` | `/Workspace/Users/<your-email>/abs-labour-force` | Workspace project folder containing `referencedatasets/`; generated Excel files and CSVs go into `outputs/`. |
 
 In the final code cell of **each** notebook, replace:
 

@@ -26,9 +26,9 @@ for path in [root / "ABS Labour Force.ipynb", *notebooks.glob("*.ipynb")]:
 
 with TemporaryDirectory() as folder:
     workspace = Path(folder)
-    (workspace / "Reference Datasets").mkdir()
+    (workspace / "referencedatasets").mkdir()
     for name in ["Table 010.xlsx", "Interim Table 14.xlsx", "MLF1.xlsx"]:
-        copy2(root / "Reference Datasets" / name, workspace / "Reference Datasets" / name)
+        copy2(root / "referencedatasets" / name, workspace / "referencedatasets" / name)
     params = {"run_date": "2026-09-27", "job_run_id": "12345", "workspace_path": str(workspace)}
 
     for key, title, filename, parse_id, tidy_id in [
@@ -41,23 +41,23 @@ with TemporaryDirectory() as folder:
         dbutils = MagicMock()
         dbutils.widgets.get.side_effect = params.__getitem__
         spark = MagicMock()
-        response = MagicMock(content=(workspace / "Reference Datasets" / filename).read_bytes())
+        response = MagicMock(content=(workspace / "referencedatasets" / filename).read_bytes())
         env = {"dbutils": dbutils, "spark": spark}
 
         # Keep each download at July while making its reference workbook end in June.
         if key == "mlf1":
             # Rebuild the temporary reference without Excel presentation pivots.
-            with pd.ExcelFile(workspace / "Reference Datasets" / filename) as book:
+            with pd.ExcelFile(workspace / "referencedatasets" / filename) as book:
                 sheet_names = book.sheet_names
                 reference = pd.read_excel(book, sheet_name="Data 1", header=None)
             reference.loc[reference[0].eq(pd.Timestamp("2026-07-01")), 0] = pd.Timestamp("2026-06-01")
-            with pd.ExcelWriter(workspace / "Reference Datasets" / filename, engine="openpyxl") as writer:
+            with pd.ExcelWriter(workspace / "referencedatasets" / filename, engine="openpyxl") as writer:
                 for sheet in sheet_names:
                     (reference if sheet == "Data 1" else pd.DataFrame()).to_excel(writer, sheet_name=sheet, header=False, index=False)
         else:
-            book = load_workbook(workspace / "Reference Datasets" / filename)
+            book = load_workbook(workspace / "referencedatasets" / filename)
             book["Data1"].delete_rows(book["Data1"].max_row)
-            book.save(workspace / "Reference Datasets" / filename)
+            book.save(workspace / "referencedatasets" / filename)
             book.close()
 
         # Run every cell with a reference workbook download and a mocked Spark destination.
