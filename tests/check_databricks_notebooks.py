@@ -15,6 +15,7 @@ notebooks = root / "notebooks"
 original = nbformat.read(root / "ABS Labour Force.ipynb", as_version=4)
 original_cells = {c.id: c.source for c in original.cells if c.cell_type == "code"}
 assert not (notebooks / "04 Publish Release.ipynb").exists()
+assert (notebooks / "04 Prepare Table 013.ipynb").exists(), "Table 013 preparation notebook is missing"
 
 # Validate the notebook structure and Python syntax.
 for path in [root / "ABS Labour Force.ipynb", *notebooks.glob("*.ipynb")]:
@@ -27,7 +28,7 @@ for path in [root / "ABS Labour Force.ipynb", *notebooks.glob("*.ipynb")]:
 with TemporaryDirectory() as folder:
     workspace = Path(folder)
     (workspace / "referencedatasets").mkdir()
-    for name in ["Table 010.xlsx", "Interim Table 14.xlsx", "MLF1.xlsx"]:
+    for name in ["Table 010.xlsx", "Interim Table 14.xlsx", "MLF1.xlsx", "Table 013.xlsx"]:
         copy2(root / "referencedatasets" / name, workspace / "referencedatasets" / name)
     params = {"run_date": "2026-09-27", "job_run_id": "12345", "workspace_path": str(workspace)}
 
@@ -35,6 +36,7 @@ with TemporaryDirectory() as folder:
         ("table_010", "Table 010", "Table 010.xlsx", "c580e5a9", "839f822b"),
         ("table_014", "Table 014", "Interim Table 14.xlsx", "a8a775f8", "4e4cef74"),
         ("mlf1", "MLF1", "MLF1.xlsx", "e089167e", "16a10d4b"),
+        ("table_013", "Table 013", "Table 013.xlsx", None, None),
     ]:
         path = next(notebooks.glob(f"0* Prepare {title}.ipynb"))
         nb = nbformat.read(path, as_version=4)
@@ -44,7 +46,9 @@ with TemporaryDirectory() as folder:
         response = MagicMock(content=(workspace / "referencedatasets" / filename).read_bytes())
         env = {"dbutils": dbutils, "spark": spark}
 
-        # Keep each download at July while making its reference workbook end in June.
+        release_month = "2026-07"
+        latest = pd.Timestamp(release_month)
+        # Keep the downloaded reference intact and move the temporary baseline back one month.
         if key == "mlf1":
             # Rebuild the temporary reference without Excel presentation pivots.
             with pd.ExcelFile(workspace / "referencedatasets" / filename) as book:
@@ -68,23 +72,44 @@ with TemporaryDirectory() as folder:
         df = env["df"]
         assert env["csv_file"].exists()
         assert env["run"] == workspace / "outputs" / key / "2026-09-27_12345"
-        assert env["release_month"] == "2026-07"
+        assert env["release_month"] == release_month
+        assert f"/{latest:%b-%Y}/".lower() in env["source_url"]
         assert "release_month" not in [call.args[0] for call in dbutils.widgets.get.call_args_list]
         manifest = pd.read_csv(env["run"] / "sources.csv")
-        assert manifest.loc[0, "reference_period"] == "2026-07-01"
+        assert manifest.loc[0, "reference_period"] == f"{release_month}-01"
         assert manifest.loc[0, "output_file"] == env["csv_file"].name
         assert manifest.loc[0, "source_url"] == env["source_url"]
         assert not list(env["run"].glob("*.json"))
         dbutils.jobs.taskValues.set.assert_not_called()
 
-        # Compare the cleaned data with the original notebook's processing.
-        sources = pd.DataFrame([(title, filename, env["download_file"])], columns=["dataset", "baseline_file", "download_file"]).set_index("dataset")
-        old_env = {**env, "sources": sources}
-        with redirect_stdout(StringIO()):
-            exec(compile(original_cells[parse_id], parse_id, "exec"), old_env)
-            exec(compile(original_cells[tidy_id], tidy_id, "exec"), old_env)
-        expected = old_env[key] if key != "mlf1" else old_env["mlf"].rename(columns={"region_code": "sa4_code", "region": "sa4_region"})
-        pd.testing.assert_frame_equal(df, expected[df.columns])
+        if key == "table_013":
+            # Reconcile every series and monthly value directly to the original ABS workbook.
+            raw = pd.read_excel(root / "referencedatasets" / filename, sheet_name="Data1", header=None)
+            expected = raw.iloc[10:, 1:].set_axis(pd.to_datetime(raw.iloc[10:, 0]).rename("date")).set_axis(raw.iloc[9, 1:].rename("series_id"), axis=1)
+            actual = df.pivot(index="date", columns="series_id", values="value")
+            pd.testing.assert_frame_equal(actual, expected.sort_index(axis=1), check_dtype=False)
+            assert df.shape == (66348, 10)
+            assert df["sex"].value_counts().to_dict() == {"Persons": 22116, "Males": 22116, "Females": 22116}
+            assert df["region"].unique().tolist() == ["Australia"]
+            assert df["age"].unique().tolist() == ["15-24 years"]
+            assert set(df["series_type"]) == {"Trend", "Seasonally Adjusted", "Original"}
+            assert not df.isna().any().any()
+            labels = df.drop_duplicates("series_id").set_index("series_id")
+            for col in raw.columns[1:]:
+                measure, sex = [part.strip().removeprefix(">").strip() for part in raw.loc[0, col].strip().rstrip(";").split(";")]
+                row = labels.loc[raw.loc[9, col]]
+                assert row["measure"] == measure and row["sex"] == sex
+                assert row["unit"] == {"000": "'000", "Percent": "Percent"}[raw.loc[1, col]]
+                assert row["series_type"] == raw.loc[2, col] and row["data_type"] == raw.loc[3, col]
+        else:
+            # Compare the cleaned data with the original notebook's processing.
+            sources = pd.DataFrame([(title, filename, env["download_file"])], columns=["dataset", "baseline_file", "download_file"]).set_index("dataset")
+            old_env = {**env, "sources": sources}
+            with redirect_stdout(StringIO()):
+                exec(compile(original_cells[parse_id], parse_id, "exec"), old_env)
+                exec(compile(original_cells[tidy_id], tidy_id, "exec"), old_env)
+            expected = old_env[key] if key != "mlf1" else old_env["mlf"].rename(columns={"region_code": "sa4_code", "region": "sa4_region"})
+            pd.testing.assert_frame_equal(df, expected[df.columns])
 
         # Read the saved CSV with identifiers kept as text and compare its values.
         dtypes = {column: str for column in df.columns if column not in ["date", "value"]}
@@ -102,7 +127,7 @@ with TemporaryDirectory() as folder:
         writer.format.return_value.mode.assert_called_once_with("overwrite")
         writer.format.return_value.mode.return_value.saveAsTable.assert_called_once_with(f"YOUR_CATALOG.YOUR_SCHEMA.{key}")
         spark.sql.assert_not_called()
-        print(key, df.shape, "matches original processing; CSV and direct overwrite verified")
+        print(key, df.shape, "matches source processing; CSV and direct overwrite verified")
 
         # A failed Delta write must leave no completion record.
         failed = env["output"] / "2026-09-28_failed"
@@ -115,14 +140,14 @@ with TemporaryDirectory() as folder:
             exec(nb.cells[14].source, {**env, "spark": failed_spark, "run": failed})
         assert not (failed / "sources.csv").exists()
 
-        # Ignore incomplete runs and another table's later release; advance past completed July.
+        # Ignore incomplete runs and another table's later release; advance past this completed release.
         other_key = "table_014" if key != "table_014" else "mlf1"
         other = workspace / "outputs" / other_key / "other_run"
         other.mkdir(parents=True, exist_ok=True)
         pd.DataFrame({"reference_period": ["2030-01-01"]}).to_csv(other / "sources.csv", index=False)
         with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
             exec(nb.cells[4].source, env)
-        assert env["release_month"] == "2026-08"
+        assert env["release_month"] == (latest + pd.offsets.MonthBegin(1)).strftime("%Y-%m")
 
         # Select the latest completed release regardless of folder name or insertion order.
         later = env["output"] / "earlier_folder_name"
