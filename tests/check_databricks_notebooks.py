@@ -22,7 +22,7 @@ for path in [root / "ABS Labour Force.ipynb", *notebooks.glob("*.ipynb")]:
     nb = nbformat.read(path, as_version=4)
     nbformat.validate(nb)
     for cell in nb.cells:
-        if cell.cell_type == "code":
+        if cell.cell_type == "code" and not cell.source.startswith("%pip "):
             ast.parse(cell.source)
 
 with TemporaryDirectory() as folder:
@@ -40,6 +40,7 @@ with TemporaryDirectory() as folder:
     ]:
         path = next(notebooks.glob(f"0* Prepare {title}.ipynb"))
         nb = nbformat.read(path, as_version=4)
+        params_cell = next(cell.source for cell in nb.cells if cell.cell_type == "code" and "dbutils.widgets.text" in cell.source)
         dbutils = MagicMock()
         dbutils.widgets.get.side_effect = params.__getitem__
         spark = MagicMock()
@@ -67,7 +68,7 @@ with TemporaryDirectory() as folder:
         # Run every cell with a reference workbook download and a mocked Spark destination.
         with patch("requests.get", return_value=response), redirect_stdout(StringIO()):
             for cell in nb.cells:
-                if cell.cell_type == "code":
+                if cell.cell_type == "code" and not cell.source.startswith("%pip "):
                     exec(compile(cell.source, str(path), "exec"), env)
         df = env["df"]
         assert env["csv_file"].exists()
@@ -137,7 +138,7 @@ with TemporaryDirectory() as folder:
             "Test publication failure"
         )
         with TestCase().assertRaisesRegex(RuntimeError, "Test publication failure"):
-            exec(nb.cells[14].source, {**env, "spark": failed_spark, "run": failed})
+            exec(nb.cells[-1].source, {**env, "spark": failed_spark, "run": failed})
         assert not (failed / "sources.csv").exists()
 
         # Ignore incomplete runs and another table's later release; advance past this completed release.
@@ -146,7 +147,7 @@ with TemporaryDirectory() as folder:
         other.mkdir(parents=True, exist_ok=True)
         pd.DataFrame({"reference_period": ["2030-01-01"]}).to_csv(other / "sources.csv", index=False)
         with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
-            exec(nb.cells[4].source, env)
+            exec(params_cell, env)
         assert env["release_month"] == (latest + pd.offsets.MonthBegin(1)).strftime("%Y-%m")
 
         # Select the latest completed release regardless of folder name or insertion order.
@@ -154,14 +155,14 @@ with TemporaryDirectory() as folder:
         later.mkdir()
         pd.DataFrame({"reference_period": ["2026-09-01"]}).to_csv(later / "sources.csv", index=False)
         with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
-            exec(nb.cells[4].source, env)
+            exec(params_cell, env)
         assert env["release_month"] == "2026-10"
 
         # If only an older completion exists, the newer reference month determines the next release.
         (later / "sources.csv").unlink()
         pd.DataFrame({"reference_period": ["2026-05-01"]}).to_csv(env["run"] / "sources.csv", index=False)
         with patch("pandas.read_excel", return_value=pd.DataFrame({"date": [pd.Timestamp("2026-06-01")]})), redirect_stdout(StringIO()):
-            exec(nb.cells[4].source, env)
+            exec(params_cell, env)
         assert env["release_month"] == "2026-07"
         (other / "sources.csv").unlink()
         print(f"{title} automatic release selection and publication-failure handling verified")
